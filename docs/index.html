@@ -265,6 +265,32 @@
     border-radius: 3px;
   }
 
+
+  .steps {
+    list-style: none;
+    counter-reset: step;
+    padding: 0;
+    margin: 0;
+  }
+  .steps li {
+    counter-increment: step;
+    position: relative;
+    padding: 12px 0 12px 46px;
+    border-top: 1px solid var(--rule);
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 8px;
+    font-weight: 800;
+    font-size: 1.5rem;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+  }
+  .steps b { font-weight: 700; }
+  .steps-cols h3 { font-size: 1.15rem; font-weight: 700; margin: 0 0 12px; }
+
   /* Diagram */
   .diagram svg { width: 100%; height: auto; display: block; }
   .diagram text { font-family: var(--font); font-size: 17px; fill: var(--fg); }
@@ -371,6 +397,7 @@
 <div class="field-wrap wrap">
   <div class="field-cap">
     <span><b>Three prompts from the test set</b>, placed by the score the final model gave them</span>
+    <span>hatched area is flagged</span>
   </div>
 
   <div class="field" role="figure" aria-label="A scale from 0 to 1 with the flag threshold at 0.485. Three test prompts score 0.554, 0.875 and 0.983, all inside the flagged area.">
@@ -457,7 +484,9 @@
   <section id="architecture">
     <h2>Architecture</h2>
     <div class="prose">
-      <p>The gateway is a small FastAPI app that speaks the same API as OpenAI, so clients point at it exactly as they would at the model. It forwards each request untouched to the LLM (Ollama in the demo) and passes the reply straight back. The newest user message goes into a queue on the side, so scoring never delays a response.</p>
+      <h3 style="margin-top:0">What it does</h3>
+      <p>Distilator sits between the people using an LLM and the LLM itself. Every chat request goes through it on the way to the model. The request and the reply pass through untouched, so users don't notice it's there. On the side, it reads the newest message each user sends and asks a fine-tuned Laya model one question: does this look like an attempt to distill the model? The answer is a score between 0 and 1.</p>
+      <p>Each score is stored in Elasticsearch together with the API key that sent it, and a Kibana rule raises an alert when a prompt scores 0.485 or higher. That leaves a security analyst with a list of suspicious prompts and the keys behind them, instead of a mountain of raw chat logs.</p>
     </div>
 
     <figure class="diagram full" style="margin:12px 0">
@@ -511,12 +540,28 @@
       </svg>
     </figure>
 
-    <div class="cols full">
+    <div class="cols full steps-cols">
       <div>
-        <p>A background worker takes prompts off the queue in batches of up to 32, runs them through all three checkpoints and averages the scores. Each prompt becomes one event in Elasticsearch with a hashed API key, the session ID, a hash and length of the prompt, the three seed scores, the mean and whether it crossed the threshold.</p>
+        <h3>How a prompt moves through it</h3>
+        <ol class="steps">
+          <li>A client sends a normal chat request to the gateway, with its API key in the header.</li>
+          <li>The gateway forwards the request to the LLM (Ollama in the demo) and sends the reply straight back to the client.</li>
+          <li>It puts the newest user message on a queue, along with a hash of the API key, the session ID and a hash of the prompt.</li>
+          <li>A background worker collects up to 32 queued prompts, or whatever arrives within 200&nbsp;ms, and scores them with all three Laya checkpoints. The three scores are averaged.</li>
+          <li>Each prompt becomes one event in Elasticsearch, with the seed scores, the mean and whether it crossed 0.485.</li>
+          <li>A Kibana detection rule turns flagged events into alerts, which an analyst can group and read per API key.</li>
+        </ol>
       </div>
       <div>
-        <p>A Kibana detection rule turns flagged events into alerts. Detection is meant to happen per key rather than per prompt. One flagged prompt says very little. A key where half the prompts get flagged says a lot.</p>
+        <h3>How I built it</h3>
+        <ol class="steps">
+          <li><b>Data.</b> I combined the attack and benign prompts from the Distillery dataset with human-written requests from Dolly and no_robots and coding requests from CodeAlpaca, removed near-duplicates and split everything into training, validation and test sets.</li>
+          <li><b>Rewrites.</b> A script sent training prompts to a local LLM and had it rewrite them in casual, terse and indirect styles, rejecting rewrites that came back empty, too long or as refusals. Both attacks and normal prompts were rewritten, so writing style couldn't give the label away.</li>
+          <li><b>Training.</b> Each prompt became a Laya training row with the fixed question and a yes or no answer. I fine-tuned on 3,000 rows (half original, half rewritten) for a single epoch on my RTX 3080. Earlier versions trained longer and learned the dataset's quirks instead of the task.</li>
+          <li><b>Seeds.</b> I trained the same setup three times with different seeds and averaged the results, because single runs varied a lot.</li>
+          <li><b>Testing.</b> I put together separate sets of test prompts (obvious attacks, subtle ones and harmless lookalikes) and compared the model against untuned Laya at the same false-positive level.</li>
+          <li><b>Gateway and alerts.</b> I wrote the FastAPI gateway, a small script that sends prompts as different API keys, and the Kibana detection rule you can see in the results.</li>
+        </ol>
       </div>
     </div>
   </section>
