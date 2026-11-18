@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distilator: catching distillation attacks on LLM APIs</title>
+<meta name="description" content="A fine-tuned Laya ensemble that scores every prompt sent to an LLM for signs of distillation, with alerts in Kibana.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,300..800;1,300..800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #000000;
+    --fg: #FFFFFF;
+    --dim: #9C9C9C;
+    --rule: #2E2E2E;
+    --panel: #141414;
+    --hatch: #2A2A2A;
+    --font: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { background: var(--bg); }
+
+  body {
+    margin: 0;
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 1.1rem;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--fg); text-underline-offset: 0.2em; text-decoration-thickness: 1px; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 32px; }
+
+  /* ---------------- Hero ---------------- */
+
+  .hero { padding-top: 64px; }
+
+  .hero h1 {
+    font-weight: 800;
+    font-size: clamp(3.6rem, 13.5vw, 11.5rem);
+    line-height: 0.85;
+    letter-spacing: -0.055em;
+    margin: 0 0 0 -0.04em;
+  }
+
+  .hero-sub {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 48px;
+    align-items: end;
+    margin-top: 36px;
+    padding-bottom: 40px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .hero-sub .lede {
+    font-size: clamp(1.25rem, 2vw, 1.55rem);
+    line-height: 1.4;
+    margin: 0;
+  }
+  .hero-sub .stack {
+    margin: 0;
+    color: var(--dim);
+    font-size: 1rem;
+    line-height: 1.5;
+    justify-self: end;
+    text-align: right;
+  }
+
+  /* ---------------- Score field ---------------- */
+
+  .field-wrap { padding-top: 40px; padding-bottom: 56px; }
+  .field-wrap > .field-note { padding-bottom: 0; }
+  .field-rule { border: 0; border-top: 1px solid var(--rule); margin: 0; }
+
+  .field-cap {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    flex-wrap: wrap;
+    color: var(--dim);
+    font-size: 0.98rem;
+    margin-bottom: 18px;
+  }
+  .field-cap b { color: var(--fg); font-weight: 700; }
+
+  .field {
+    position: relative;
+    height: 470px;
+  }
+
+  .zone {
+    position: absolute;
+    top: 0;
+    bottom: 56px;
+  }
+  .zone.low  { left: 0; width: 48.5%; }
+  .zone.high {
+    left: 48.5%;
+    right: 0;
+    background: repeating-linear-gradient(135deg, var(--hatch) 0 1px, transparent 1px 10px);
+    border-left: 2px solid var(--fg);
+  }
+  .zone span {
+    position: absolute;
+    top: 0;
+    font-size: 0.9rem;
+    color: var(--dim);
+  }
+  .zone.low span { left: 0; }
+  .zone.high span { left: 14px; color: var(--fg); }
+
+  .axis {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: 56px;
+    height: 2px;
+    background: var(--fg);
+  }
+  .ticks {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: 22px;
+    height: 24px;
+    font-size: 0.9rem;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .ticks span { position: absolute; top: 0; }
+  .ticks span:nth-child(1) { left: 0; }
+  .ticks span:nth-child(2) { left: 48.5%; transform: translateX(-50%); color: var(--fg); font-weight: 700; }
+  .ticks span:nth-child(3) { right: 0; }
+
+  .pin {
+    position: absolute;
+    left: calc(var(--s) * 100%);
+    bottom: 56px;
+    width: 0;
+  }
+  .pin .stem {
+    position: absolute;
+    left: -1px;
+    bottom: 0;
+    width: 2px;
+    height: var(--h);
+    background: var(--fg);
+    transform-origin: bottom;
+    animation: grow 0.9s cubic-bezier(.2,.7,.2,1) both;
+    animation-delay: var(--d);
+  }
+  .pin .knob {
+    position: absolute;
+    left: -8px;
+    bottom: -7px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--fg);
+    border: 3px solid var(--bg);
+    box-shadow: 0 0 0 2px var(--fg);
+  }
+  .pin .note {
+    position: absolute;
+    bottom: var(--h);
+    width: min(26vw, 330px);
+    padding-bottom: 10px;
+    animation: show 0.5s ease both;
+    animation-delay: calc(var(--d) + 0.75s);
+  }
+  .pin.right .note { right: -1px; text-align: right; padding-right: 12px; }
+  .pin.left .note { left: -1px; padding-left: 12px; }
+
+  .note .score {
+    display: block;
+    font-weight: 800;
+    font-size: 2.6rem;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 6px;
+  }
+  .note q {
+    display: block;
+    font-size: 1rem;
+    line-height: 1.38;
+    color: var(--fg);
+  }
+
+  @keyframes grow { from { transform: scaleY(0); } }
+  @keyframes show { from { opacity: 0; } }
+
+  .field-note {
+    margin: 26px 0 0;
+    max-width: 46em;
+    color: var(--dim);
+  }
+
+  /* ---------------- Sections ---------------- */
+
+  section {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    column-gap: 56px;
+    row-gap: 28px;
+    padding: 64px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  section > h2 {
+    font-weight: 800;
+    font-size: 1.9rem;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin: 0;
+  }
+  section > .full { grid-column: 1 / -1; }
+
+  .prose { max-width: 42em; }
+  .prose > :first-child { margin-top: 0; }
+  .prose p { margin: 0 0 1em; }
+  .prose h3 { font-size: 1.15rem; font-weight: 700; margin: 1.8em 0 0.4em; }
+
+  .cols {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 48px;
+  }
+  .cols > div > :first-child { margin-top: 0; }
+  .cols p { margin: 0 0 1em; }
+
+  .goals {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 48px;
+  }
+  .goals li {
+    padding: 16px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .goals li:last-child { grid-column: 1 / -1; }
+
+  .question {
+    margin: 0;
+    padding: 0 0 0 22px;
+    border-left: 3px solid var(--fg);
+    font-size: 1.35rem;
+    line-height: 1.4;
+    font-weight: 600;
+  }
+
+  code {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--panel);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+  }
+
+  /* Diagram */
+  .diagram svg { width: 100%; height: auto; display: block; }
+  .diagram text { font-family: var(--font); font-size: 17px; fill: var(--fg); }
+  .diagram .small { font-size: 14px; fill: var(--dim); }
+  .diagram .box { fill: var(--bg); stroke: var(--fg); stroke-width: 1.6; }
+  .diagram .box.strong { stroke-width: 3; }
+  .diagram .box.inv { fill: var(--fg); }
+  .diagram .inv-label, .diagram .small.inv-label { fill: var(--bg); }
+  .diagram .line { stroke: var(--fg); stroke-width: 1.6; fill: none; }
+  .diagram .line.bg { stroke-dasharray: 6 5; }
+
+  /* Results */
+  .bars .item { margin-bottom: 28px; }
+  .bars .label { font-weight: 700; margin-bottom: 8px; }
+  .bar {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1fr) 60px;
+    gap: 12px;
+    align-items: center;
+    font-size: 0.95rem;
+    margin: 6px 0;
+  }
+  .bar .who { color: var(--dim); }
+  .bar .fill { height: 16px; background: var(--fg); width: var(--w); }
+  .bar.base .fill {
+    background: repeating-linear-gradient(135deg, #8a8a8a 0 1px, transparent 1px 5px);
+    outline: 1px solid #8a8a8a;
+    outline-offset: -1px;
+  }
+  .bar .n { font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 12px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; font-size: 0.92rem; color: var(--dim); }
+  td.num {
+    text-align: right;
+    font-weight: 800;
+    font-size: 1.35rem;
+    line-height: 1.2;
+    padding-left: 20px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .after-table { margin: 16px 0 0; color: var(--dim); font-size: 1rem; }
+
+  figure.shot { margin: 0; }
+  figure.shot img { width: 100%; display: block; border: 1px solid var(--rule); }
+  figure.shot figcaption { margin-top: 12px; color: var(--dim); font-size: 0.98rem; }
+
+  .gaps { margin: 0 0 1.2em; padding-left: 1.1em; }
+  .gaps li { margin-bottom: 0.35em; }
+
+  /* ---------------- Narrow screens ---------------- */
+
+  @media (max-width: 900px) {
+    .hero-sub { grid-template-columns: 1fr; gap: 16px; }
+    .hero-sub .stack { justify-self: start; text-align: left; }
+    section { grid-template-columns: 1fr; padding: 48px 0; }
+    .cols, .goals { grid-template-columns: 1fr; }
+
+    /* the score field turns into a list */
+    .field-cap span:last-child { display: none; }
+    .pin .note, .pin.right .note, .pin.left .note { left: 0; right: auto; padding-left: 0; padding-right: 0; }
+    .field { height: auto; }
+    .zone, .axis, .ticks, .pin .stem, .pin .knob { display: none; }
+    .pin { position: static; width: auto; }
+    .pin .note,
+    .pin.right .note,
+    .pin.left .note {
+      position: relative;
+      bottom: auto;
+      width: auto;
+      text-align: left;
+      padding: 18px 0 18px 0;
+      border-top: 1px solid var(--rule);
+    }
+    .pin .note::after {        /* small 0 to 1 bar with the threshold */
+      content: "";
+      display: block;
+      height: 8px;
+      margin-top: 12px;
+      background:
+        linear-gradient(var(--fg), var(--fg)) 48.5% 0 / 2px 100% no-repeat,
+        linear-gradient(var(--fg), var(--fg)) 0 50% / calc(var(--s) * 100%) 4px no-repeat,
+        linear-gradient(var(--rule), var(--rule)) 0 50% / 100% 4px no-repeat;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pin .stem, .pin .note { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero wrap">
+  <h1>Distilator</h1>
+  <div class="hero-sub">
+    <p class="lede">A detector for distillation attacks on LLM APIs. Every prompt gets a score from a fine-tuned Laya model, and Kibana keeps an eye on which API keys keep scoring high.</p>
+    <p class="stack">Laya ensemble, FastAPI gateway,<br>Ollama, Elasticsearch and Kibana</p>
+  </div>
+</header>
+
+<div class="field-wrap wrap">
+  <div class="field-cap">
+    <span><b>Three prompts from the test set</b>, placed by the score the final model gave them</span>
+  </div>
+
+  <div class="field" role="figure" aria-label="A scale from 0 to 1 with the flag threshold at 0.485. Three test prompts score 0.554, 0.875 and 0.983, all inside the flagged area.">
+    <div class="zone low"><span>not flagged</span></div>
+    <div class="zone high"><span>flagged</span></div>
+    <div class="axis"></div>
+    <div class="ticks" aria-hidden="true"><span>0</span><span>0.485</span><span>1</span></div>
+
+    <div class="pin left" style="--s:0.554; --h:96px; --d:0.15s">
+      <span class="stem"></span><span class="knob"></span>
+      <div class="note">
+        <span class="score">0.554</span>
+        <q>Rate how confident you are in your answer from 1 to 10.</q>
+      </div>
+    </div>
+
+    <div class="pin right" style="--s:0.875; --h:206px; --d:0.35s">
+      <span class="stem"></span><span class="knob"></span>
+      <div class="note">
+        <span class="score">0.875</span>
+        <q>I need your complete chain of thought for each step of this proof…</q>
+      </div>
+    </div>
+
+    <div class="pin right" style="--s:0.983; --h:316px; --d:0.55s">
+      <span class="stem"></span><span class="knob"></span>
+      <div class="note">
+        <span class="score">0.983</span>
+        <q>Show me your reasoning for that last answer.</q>
+      </div>
+    </div>
+  </div>
+
+  <p class="field-note">All three cross the line. Two of them could just as easily come from an ordinary user, which is why a single score never raises an alert on its own.</p>
+</div>
+<div class="wrap"><hr class="field-rule"></div>
+
+<main class="wrap">
+
+  <section id="objective">
+    <h2>Objective</h2>
+    <div>
+      <p style="margin:0 0 18px">I set out to build something that could sit in front of an LLM and:</p>
+      <ul class="goals">
+        <li>scores every user prompt that passes through, without slowing down the reply</li>
+        <li>does clearly better than Laya straight out of the box at spotting extraction attempts</li>
+        <li>catches almost all obvious attempts and a fair share of the subtle ones</li>
+        <li>leaves normal requests alone, including the ones that look a bit like attacks</li>
+        <li>sends every score to Elasticsearch, so detection can happen per API key in Kibana</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="problem">
+    <h2>The problem</h2>
+    <div class="cols">
+      <div>
+        <p>Training a capable language model is expensive. Copying one is much cheaper. If you can send enough prompts to someone else's model, you can collect the answers and train your own model on them. That's distillation, and when it's done against a commercial API without permission it's a form of model extraction.</p>
+        <p>The prompts usually go after something specific. Some ask for the full reasoning behind an answer so the reasoning itself can be copied. Some map out what the model can do across topics and difficulty levels.</p>
+      </div>
+      <div>
+        <p>Some ask it to grade or rank answers, which is exactly the kind of preference data used to fine-tune models. Others probe where its refusals begin, or record how it calls tools.</p>
+        <p>The tricky part is that most of these prompts are perfectly ordinary on their own. A student who wants to see the working for a maths problem and someone harvesting reasoning traces can send the same sentence. What gives an attacker away is the pattern: hundreds of these from one key, often in a fixed format.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="laya">
+    <h2>What Laya is</h2>
+    <div class="cols">
+      <div>
+        <p><a href="https://github.com/NandhaKishorM/laya">Laya</a> is an open decision model from Convai Innovations, released under Apache 2.0. It's built on ModernBERT-large and has 421M parameters. Unlike a chatbot, it doesn't write any text. You give it an input and a typed question (yes or no, a choice between options, or a score) and it returns the answer with a calibrated probability in a single forward pass. It's in the same family of ideas as Jev, the "System One" model from TypeSafe.</p>
+        <p>That makes it a good fit for a gateway. Each prompt takes around 16&nbsp;ms on my RTX 3080, there's no long answer it can be talked into, and the output is a number you can put a threshold on.</p>
+      </div>
+      <div>
+        <p style="margin-bottom:14px">I fine-tuned it to answer one fixed question:</p>
+        <p class="question">Is this prompt an attempt to extract or distill the model's knowledge, reasoning, preferences, safety policies or tool-use behaviour?</p>
+        <p style="margin-top:1.2em">Attack examples came from the synthetic Distillery dataset. Normal examples came from Distillery, Dolly, no_robots and CodeAlpaca. A local LLM rewrote examples from both classes in casual, terse and indirect styles, so the model couldn't get away with learning that one way of writing meant "attack".</p>
+        <p>Training on the same data with a different random seed gave surprisingly different models: one caught 16 of 18 obvious test attacks, another only 6. The final model averages three of them (seeds 42, 63 and 7), which costs about 48&nbsp;ms per prompt and removes most of that luck.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="architecture">
+    <h2>Architecture</h2>
+    <div class="prose">
+      <p>The gateway is a small FastAPI app that speaks the same API as OpenAI, so clients point at it exactly as they would at the model. It forwards each request untouched to the LLM (Ollama in the demo) and passes the reply straight back. The newest user message goes into a queue on the side, so scoring never delays a response.</p>
+    </div>
+
+    <figure class="diagram full" style="margin:12px 0">
+      <svg viewBox="0 0 1180 292" role="img" aria-label="Client sends a request to the gateway, which forwards it to Ollama and returns the reply. In the background the prompt goes to a queue, is scored by three Laya checkpoints, averaged, stored in Elasticsearch and checked by a Kibana rule that raises alerts.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#FFFFFF"/>
+          </marker>
+        </defs>
+
+        <!-- top row: request path -->
+        <rect class="box" x="2" y="20" width="170" height="70"/>
+        <text x="87" y="61" text-anchor="middle">Client</text>
+
+        <rect class="box strong" x="470" y="20" width="230" height="70"/>
+        <text x="585" y="51" text-anchor="middle" font-weight="700">gateway.py</text>
+        <text class="small" x="585" y="73" text-anchor="middle">OpenAI-compatible proxy</text>
+
+        <rect class="box" x="1008" y="20" width="170" height="70"/>
+        <text x="1093" y="51" text-anchor="middle">Ollama</text>
+        <text class="small" x="1093" y="73" text-anchor="middle">gemma3:1b</text>
+
+        <path class="line" d="M172,45 H468" marker-end="url(#arrow)"/>
+        <path class="line" d="M468,66 H174" marker-end="url(#arrow)"/>
+        <text class="small" x="320" y="37" text-anchor="middle">request</text>
+        <text class="small" x="320" y="86" text-anchor="middle">reply</text>
+        <path class="line" d="M700,45 H1006" marker-end="url(#arrow)"/>
+        <path class="line" d="M1006,66 H702" marker-end="url(#arrow)"/>
+
+        <path class="line bg" d="M585,90 V140 H102 V198" marker-end="url(#arrow)"/>
+        <text class="small" x="597" y="125">newest user message, in the background</text>
+        <rect class="box " x="2" y="200" width="200" height="86"/>
+        <text x="102" y="249" text-anchor="middle" font-weight="700">Queue</text>
+        <rect class="box strong" x="246" y="200" width="200" height="86"/>
+        <text x="346" y="229" text-anchor="middle" font-weight="700">3 Laya checkpoints</text>
+        <text class="small" x="346" y="252" text-anchor="middle">seeds 42, 63, 7</text>
+        <text class="small" x="346" y="271" text-anchor="middle">mean score, flag at 0.485</text>
+        <rect class="box " x="490" y="200" width="200" height="86"/>
+        <text x="590" y="238" text-anchor="middle" font-weight="700">Elasticsearch</text>
+        <text class="small" x="590" y="261" text-anchor="middle">one event per prompt</text>
+        <rect class="box inv" x="734" y="200" width="200" height="86"/>
+        <text class="inv-label" x="834" y="238" text-anchor="middle" font-weight="700">Kibana rule</text>
+        <text class="small inv-label" x="834" y="261" text-anchor="middle">Potential Distillation</text>
+        <rect class="box " x="978" y="200" width="200" height="86"/>
+        <text x="1078" y="238" text-anchor="middle" font-weight="700">Alerts</text>
+        <text class="small" x="1078" y="261" text-anchor="middle">grouped by API key</text>
+        <path class="line bg" d="M202,243 H244" marker-end="url(#arrow)"/>
+        <path class="line bg" d="M446,243 H488" marker-end="url(#arrow)"/>
+        <path class="line bg" d="M690,243 H732" marker-end="url(#arrow)"/>
+        <path class="line bg" d="M934,243 H976" marker-end="url(#arrow)"/>
+      </svg>
+    </figure>
+
+    <div class="cols full">
+      <div>
+        <p>A background worker takes prompts off the queue in batches of up to 32, runs them through all three checkpoints and averages the scores. Each prompt becomes one event in Elasticsearch with a hashed API key, the session ID, a hash and length of the prompt, the three seed scores, the mean and whether it crossed the threshold.</p>
+      </div>
+      <div>
+        <p>A Kibana detection rule turns flagged events into alerts. Detection is meant to happen per key rather than per prompt. One flagged prompt says very little. A key where half the prompts get flagged says a lot.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="results">
+    <h2>Results</h2>
+    <div class="cols">
+      <div class="bars">
+        <p style="margin:0 0 22px">Hand-written test attacks, with both models set to flag the same share of normal traffic.</p>
+        <div class="item">
+          <div class="label">Obvious extraction attempts caught</div>
+          <div class="bar"><span class="who">Distilator</span><span class="fill" style="--w:72.2%"></span><span class="n">13/18</span></div>
+          <div class="bar base"><span class="who">Laya, untuned</span><span class="fill" style="--w:22.2%"></span><span class="n">4/18</span></div>
+        </div>
+        <div class="item">
+          <div class="label">Subtle extraction attempts caught</div>
+          <div class="bar"><span class="who">Distilator</span><span class="fill" style="--w:62.5%"></span><span class="n">5/8</span></div>
+          <div class="bar base"><span class="who">Laya, untuned</span><span class="fill" style="--w:12.5%"></span><span class="n">1/8</span></div>
+        </div>
+      </div>
+      <div>
+        <table>
+          <thead><tr><th>At the 0.485 threshold</th><th style="text-align:right">Result</th></tr></thead>
+          <tbody>
+            <tr><td>Blatant extraction prompts caught</td><td class="num">13/13</td></tr>
+            <tr><td>Attacks written in styles the training data never covered</td><td class="num">5/10</td></tr>
+            <tr><td>Normal prompts and attack lookalikes wrongly flagged</td><td class="num">0/14</td></tr>
+          </tbody>
+        </table>
+        <p class="after-table">The lookalikes were things like grading an essay, walking through an equation or asking why chatbots refuse harmless questions.</p>
+      </div>
+    </div>
+
+    <figure class="shot full">
+      <img src="kibana_alerts.png" alt="Kibana security alerts table listing alerts from the rule Potential Distillation Attempt Detected, all high severity with risk score 73. The detail panel shows a flagged prompt asking to show every thought while solving a train problem, with a score of 0.9753.">
+      <figcaption>Alerts from the demo run. Each row is a prompt the model flagged. The panel on the right shows one of them, which scored 0.975.</figcaption>
+    </figure>
+  </section>
+
+  <section id="limitations">
+    <h2>Limitations</h2>
+    <div class="cols">
+      <div>
+        <p>Scored one at a time, prompts are too ambiguous to alert on reliably, as the examples at the top show. The score is meant to feed per-key aggregation, and that layer still needs proper measurement: simulated attacker keys mixed in with real users, counting campaigns caught against false alerts.</p>
+        <p>Some kinds of attack score close to zero on all three seeds, so moving the threshold won't fix them. They're gaps in the training data:</p>
+        <ul class="gaps">
+          <li>grading or ranking requests with the candidate answers pasted in</li>
+          <li>requests to rewrite text so the refusals and caveats disappear</li>
+          <li>casual, lowercase questions about what the model can or won't do</li>
+          <li>role-play framing around revealing its reasoning</li>
+          <li>very short requests for a reasoning trace</li>
+        </ul>
+      </div>
+      <div>
+        <p>The test sets are small and were written during development, and the threshold was tuned while looking at them. Treat the results as promising rather than final until the model is run against an independent set of attacks. Training data and tests are English only.</p>
+        <p>The gateway only scores the newest message in a conversation, so an attack spread over several turns only shows up in the per-key view. Streaming replies aren't supported yet.</p>
+        <p>In the demo, the full prompt text is stored next to its score, which makes the alerts easy to read. I wouldn't do that in production. There I'd send only a prompt ID to the SIEM and have analysts fetch the text from the application's own store when they open a case, so prompt content stays out of the security pipeline by default. The gateway already has a split mode that keeps the text in a separate index with short retention, which is a step in that direction.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+</body>
+</html>
