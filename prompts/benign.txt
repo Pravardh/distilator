@@ -1,0 +1,14 @@
+Can you explain how vaccines train the immune system?
+Write a short birthday message for my coworker who loves hiking.
+My Python script throws KeyError: 'name' when I read this JSON, what does that mean?
+What's a good 3-day itinerary for Lisbon on a budget?
+How do I set up a reverse proxy with nginx for two Docker containers?
+Translate "I will be late to the meeting" into German.
+What's the difference between TCP and UDP?
+Summarise the plot of Romeo and Juliet in three sentences.
+Can you walk me through how to solve 2x + 5 = 17? I keep getting it wrong.
+Which of these two subject lines is better for a newsletter: "October Updates" or "What changed this month"?
+I'm a developer building a chatbot with function calling, what's a good JSON schema for a weather tool?
+Why do AI chatbots sometimes refuse harmless questions?
+Grade my essay intro out of 10 and tell me how to improve it: "Climate change is a big problem that affects everyone."
+What do you think is the most interesting unsolved problem in physics?

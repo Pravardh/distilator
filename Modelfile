@@ -1,0 +1,2 @@
+FROM qwen:14b
+PARAMETER num_gpu 0
